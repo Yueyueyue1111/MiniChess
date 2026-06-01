@@ -59,7 +59,7 @@ static int king_tropism(
 
 
 /*============================================================
- * evaluate() — runtime-selectable eval strategy
+ * evaluate() ??? runtime-selectable eval strategy
  *============================================================*/
 
 int State::evaluate(
@@ -71,7 +71,9 @@ int State::evaluate(
 
     // [ Hackathon TODO 1-1 ]
     // if in win state, return max score(you can check base_state.hpp for max score)
-    
+    if(this->game_state == WIN){ return P_MAX; }
+    if(this->game_state == NONE ){ return M_MAX; }
+
     auto self_board = this->board.board[this->player];
     auto oppn_board = this->board.board[1 - this->player];
     int self_score = 0, oppn_score = 0;
@@ -83,18 +85,40 @@ int State::evaluate(
         int oppn_kr = -1, oppn_kc = -1;
         // [ Hackathon TODO 1-3 ]
         // get the position for player's king and opponent's king
-
+        for(int r=0; r<BOARD_H; ++r) {
+            for(int c=0; c<BOARD_W; ++c) {
+                if(self_board[r][c] == 6) { self_kr = r; self_kc = c; }
+                if(oppn_board[r][c] == 6) { oppn_kr = r; oppn_kc = c; }
+            }
+        }
         // [ Hackathon TODO 1-4 ]
         // sum player/opponent pieces' value and add to score
         // if enemy king is still on the board, you should also call king_tropism for your pieces and add the value to score
         // king_tropism is already given above
+        for(int r=0; r<BOARD_H; ++r) {
+            for(int c=0; c<BOARD_W; ++c) {
+                if(int p = self_board[r][c]) {
+                    self_score += kp_material[p] + pst[p-1][r][c];
+                    if(oppn_kr != -1) self_score += king_tropism(p, r, c, oppn_kr, oppn_kc);
+                }
+                if(int p = oppn_board[r][c]) {
+                    oppn_score += kp_material[p] + pst[p-1][r][c];
+                    if(self_kr != -1) oppn_score += king_tropism(p, r, c, self_kr, self_kc);
+                }
+            }
+        }
 
     }else{
         /* === Simple material-only eval === */
 
         // [ Hackathon TODO 1-2 ]
         // Simply add each piece's value to score
-
+        for(int r=0; r<BOARD_H; ++r) {
+            for(int c=0; c<BOARD_W; ++c) {
+                if(self_board[r][c]) self_score += simple_material[self_board[r][c]];
+                if(oppn_board[r][c]) oppn_score += simple_material[oppn_board[r][c]];
+            }
+        }
     }
 
     int bonus = 0;
@@ -221,7 +245,8 @@ static const int move_table_rook_bishop[8][7][2] = {
 // [ Hackathon TODO 2-1 ]
 // fill the knight move table
 static const int move_table_knight[8][2] = {
-
+    {2, 1}, {2, -1}, {-2, 1}, {-2, -1},
+    {1, 2}, {1, -2}, {-1, 2}, {-1, -2},
 };
 static const int move_table_king[8][2] = {
   {1, 0}, {0, 1}, {-1, 0}, {0, -1}, 
@@ -332,7 +357,22 @@ void State::get_legal_actions_naive(){
                     case 3: //knight
                         // [ Hackathon TODO 2-2 ]
                         // complete knight's movement, you can refer to other pieces' movement
-
+                        for(auto& move : move_table_knight) {
+                            int nr = i + move[0];
+                            int nc = j + move[1];
+                            if(nr >= 0 && nr < BOARD_H && nc >= 0 && nc < BOARD_W) {
+                                if(self_board[nr][nc]) continue;
+                                
+                                all_actions.push_back(Move(Point(i, j), Point(nr, nc)));
+                                
+                                if(oppn_board[nr][nc] == 6) {
+                                    this->game_state = WIN;
+                                    this->legal_actions = all_actions;
+                                    return;
+                                }
+                            }
+                        }
+                        break;
                     case 6: //king
                         for(auto move: move_table_king){
                             int p[2] = {move[0] + i, move[1] + j};
@@ -594,8 +634,8 @@ void State::get_legal_actions(){
 
 
 const char piece_table[2][7][5] = {
-  {" ", "♙", "♖", "♘", "♗", "♕", "♔"},
-  {" ", "♟", "♜", "♞", "♝", "♛", "♚"}
+  {" ", "???", "???", "???", "???", "???", "???"},
+  {" ", "???", "???", "???", "???", "???", "???"}
 };
 /**
  * @brief encode the output for command line output
