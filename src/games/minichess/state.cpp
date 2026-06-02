@@ -72,7 +72,7 @@ int State::evaluate(
     // [ Hackathon TODO 1-1 ]
     // if in win state, return max score(you can check base_state.hpp for max score)
     if(this->game_state == WIN){ return P_MAX; }
-    if(this->game_state == NONE ){ return M_MAX; }
+    //if(this->game_state == NONE ){ return M_MAX; }
 
     auto self_board = this->board.board[this->player];
     auto oppn_board = this->board.board[1 - this->player];
@@ -128,7 +128,12 @@ int State::evaluate(
         // [ Hackathon TODO 1-5 ]
         // you can calculate mobility by legal actions size
         // bonus += 2 * (self_mobility - oppn_mobility);
+        int self_mobility= (int)this->legal_actions.size();
+        BaseState* oppn_state = this->create_null_state();
+        int oppn_mobility = (int)oppn_state->legal_actions.size();
+        delete oppn_state;
 
+        bonus+= 5*(self_mobility-oppn_mobility);
     }
 
     return self_score - oppn_score + bonus;
