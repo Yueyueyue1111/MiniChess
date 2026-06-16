@@ -708,6 +708,7 @@ class GameApp(EngineManagerMixin, PromotionMixin, DialogsMixin):
 
 
 def main():
+    #print("nigger\n")
     parser = argparse.ArgumentParser(description="UBGI GUI")
     parser.add_argument(
         "--game",

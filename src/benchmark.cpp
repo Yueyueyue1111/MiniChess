@@ -3,7 +3,7 @@
 #include <iomanip>
 
 #include "config.hpp"
-#include "state.hpp"
+#include "./games/minichess/state.hpp"
 #include "./policy/registry.hpp"
 #include "./policy/game_history.hpp"
 
