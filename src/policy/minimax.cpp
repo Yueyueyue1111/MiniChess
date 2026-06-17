@@ -6,27 +6,34 @@
 #include <chrono>
 
 /*============================================================
- * Time management
+ * Mid-search time check
  *
- * SearchContext::stop is checked every N nodes and set true
- * when the time budget is exhausted. Iterative deepening
- * in search() then returns the last fully-completed result.
+ * ubgi.cpp sets ctx.stop from an external timer, but only
+ * checks it AFTER search() returns -- so a slow depth could
+ * run way over budget.
+ *
+ * Solution: every 1024 nodes, check the clock ourselves and
+ * set ctx.stop if we are over the limit. ubgi.cpp then sees
+ * ctx.stop, discards the incomplete depth, and returns the
+ * last good result.
+ *
+ * g_move_time_ms is set at the start of each search() call.
+ * We use 90% of the budget to leave a safety margin.
  *============================================================*/
-static constexpr int  TIME_CHECK_INTERVAL = 1024; // check every 1024 nodes
-static constexpr double TIME_LIMIT_MS     = 4500.0; // leave 500ms safety margin
- 
-using Clock = std::chrono::high_resolution_clock;
+using Clock     = std::chrono::high_resolution_clock;
 using TimePoint = std::chrono::time_point<Clock>;
  
 static TimePoint g_search_start;
+static int64_t   g_move_time_ms = 0;  // 0 = no limit (depth-only mode)
  
-static inline bool time_is_up(const SearchContext& ctx){
-    if((ctx.nodes & (TIME_CHECK_INTERVAL - 1)) != 0) return false;
-    double elapsed = std::chrono::duration<double, std::milli>(
+static inline void check_time(SearchContext& ctx){
+    if((ctx.nodes & 1023) != 0) return;  // only check every 1024 nodes
+    if(g_move_time_ms <= 0) return;       // no time limit set
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         Clock::now() - g_search_start).count();
-    return elapsed >= TIME_LIMIT_MS;
+    if(elapsed >= g_move_time_ms * 9 / 10)
+        ctx.stop = true;
 }
-
 
 /*============================================================
  * Quiescence
@@ -35,6 +42,7 @@ static const int Q_PIECE_VALUES[] = {0, 10, 50, 30, 30, 90, 900};
 
 int quiescence(State *state, int alpha, int beta, int ply, SearchContext& ctx){
     ctx.nodes++;
+    check_time(ctx);
     if(ctx.stop)return 0;
 
     // return the score for a winning terminal state
@@ -122,6 +130,7 @@ int MiniMax::eval_ctx(
     if(ply > ctx.seldepth){
         ctx.seldepth = ply;
     }
+    check_time(ctx);
     if(ctx.stop){
         return 0;
     }
