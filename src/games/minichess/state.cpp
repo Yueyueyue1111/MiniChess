@@ -134,6 +134,9 @@ int State::evaluate(
         // [ Hackathon TODO 1-5 ]
         // you can calculate mobility by legal actions size
         // bonus += 2 * (self_mobility - oppn_mobility);
+        if(this->legal_actions.empty() && this->game_state == UNKNOWN){
+            this->get_legal_actions();
+        }
         int self_mobility = (int)this->legal_actions.size();
         BaseState* oppnState = this->create_null_state();
         int oppn_mobility = (int)oppnState->legal_actions.size();
@@ -796,4 +799,43 @@ bool State::check_repetition(const GameHistory& history, int& out_score) const {
         return true;
     }
     return false;
+}
+
+
+void State::apply_move(const Move& move){
+    if(!zobrist_ready){ init_zobrist(); }
+
+    Point from = move.first, to = move.second;
+    int p = this->player;
+    int opp = 1 - p;
+
+    int8_t orig_piece = board.board[p][from.first][from.second];
+    int8_t moved = orig_piece;
+    
+    // promotion for pawn
+    if(moved == 1 && (to.first == BOARD_H-1 || to.first == 0)){
+        moved = 5;
+    }
+
+    // 更新 Hash (如果有的話)
+    uint64_t h = this->hash();
+    h ^= zobrist_side;
+    h ^= zobrist_piece[p][orig_piece][from.first][from.second];
+
+    int8_t captured = board.board[opp][to.first][to.second];
+    if(captured){
+        h ^= zobrist_piece[opp][captured][to.first][to.second];
+        board.board[opp][to.first][to.second] = 0;
+    }
+
+    h ^= zobrist_piece[p][moved][to.first][to.second];
+    
+    board.board[p][from.first][from.second] = 0;
+    board.board[p][to.first][to.second] = moved;
+    
+    this->player = opp; // 換對手
+    this->zobrist_hash = h;
+    this->zobrist_valid = true;
+    this->legal_actions.clear(); // 清空舊的合法步
+    this->game_state = UNKNOWN;
 }

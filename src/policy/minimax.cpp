@@ -49,6 +49,9 @@ int quiescence(State *state, int alpha, int beta, int ply, SearchContext& ctx){
     if(state->game_state == WIN) return P_MAX - ply;
     if(state->game_state == DRAW) return 0;
 
+    if (state->legal_actions.empty() && state->game_state == UNKNOWN) {
+        state->get_legal_actions();
+    }
     int stand_pat = state->evaluate(true, true, nullptr);
     if(stand_pat>=beta){
         return beta;
@@ -57,9 +60,9 @@ int quiescence(State *state, int alpha, int beta, int ply, SearchContext& ctx){
         alpha=stand_pat;
     }
 
-    if (state->legal_actions.empty() && state->game_state == UNKNOWN) {
-        state->get_legal_actions();
-    }
+    // if (state->legal_actions.empty() && state->game_state == UNKNOWN) {
+    //     state->get_legal_actions();
+    // }
     auto actions = state->legal_actions;
     if (actions.empty()) return stand_pat;
 
@@ -170,48 +173,74 @@ int MiniMax::eval_ctx(
         return val;
     }
 
+
+    auto actions = state->legal_actions;
+    int opp_player = 1 - state->player;
+
+    // 進行走法排序 (Move Ordering)
+    std::sort(actions.begin(), actions.end(), [&](const Move& a, const Move& b) {
+        int cap_a = state->piece_at(opp_player, a.second.first, a.second.second);
+        int cap_b = state->piece_at(opp_player, b.second.first, b.second.second);
+        
+        // 簡單排序策略：有吃子的走法排在前面，且吃的子價值越高越優先
+        // (如果想做得更好，可以把 Q_PIECE_VALUES 拿來這裡用 MVV-LVA)
+        return cap_a > cap_b; 
+    });
     /* === Negamax loop === */
     int best_score = M_MAX;
     bool is_first_move = true;
 
-    for(auto& action : state->legal_actions){
+    for(auto& action : actions){
         // [ Hackathon TODO 3-2 ]
         // create the child state after applying action
 
-        State *next = (State*)state->next_state(action);
-        bool same = next->same_player_as_parent();
-
+        // State *next = (State*)state->next_state(action);
+        // bool same = next->same_player_as_parent();
+        State next_state = *state;  
+        next_state.apply_move(action);
         // [Hackathon TODO 3-3]
         // search the child one level deeper
         // int score = same ? 
         //             eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, beta) :
         //             -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+        
         int score;
         if (is_first_move) {
-            // 第一個走法：使用完整的 alpha-beta window 搜尋
-            score = same ? 
-                    eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, beta) :
-                   -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+            score = -eval_ctx(&next_state, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
             is_first_move = false;
         } else {
-            // 後續走法：先用 Null Window (alpha, alpha + 1) 進行測試
-            score = same ?
-                    eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, alpha + 1) :
-                   -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -alpha - 1, -alpha);
-
-            // 如果 Null Window 測試突破了 alpha，且還沒達到 beta 剪枝線
-            // 代表這個走法可能比想像中更好，必須用完整的 window 重新搜尋 (Re-search)
+            score = -eval_ctx(&next_state, depth - 1, history, ply + 1, ctx, p, -alpha - 1, -alpha);
             if (score > alpha && score < beta) {
-                score = same ?
-                        eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, beta) :
-                       -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+                score = -eval_ctx(&next_state, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
             }
         }
+        
+        // int score;
+        // if (is_first_move) {
+        //     // 第一個走法：使用完整的 alpha-beta window 搜尋
+        //     score = same ? 
+        //             eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, beta) :
+        //            -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+        //     is_first_move = false;
+        // } else {
+        //     // 後續走法：先用 Null Window (alpha, alpha + 1) 進行測試
+        //     score = same ?
+        //             eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, alpha + 1) :
+        //            -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -alpha - 1, -alpha);
+
+        //     // 如果 Null Window 測試突破了 alpha，且還沒達到 beta 剪枝線
+        //     // 代表這個走法可能比想像中更好，必須用完整的 window 重新搜尋 (Re-search)
+        //     if (score > alpha && score < beta) {
+        //         score = same ?
+        //                 eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, beta) :
+        //                -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+        //     }
+        // }
         
         // [Hackathon TODO 3-4]
         // convert raw to the current player's perspective.
 
-        delete next;
+        //delete next;
 
         // [ Hackathon TODO 3-5 ]
         // update best_score if this child is better.
@@ -225,6 +254,7 @@ int MiniMax::eval_ctx(
             alpha = best_score;
         }
         if(alpha >= beta){
+            history.pop(state->hash());
             break;
         }
 
@@ -267,6 +297,14 @@ SearchResult MiniMax::search(
     //     }
     // }
 
+    // Fallback: always have a valid move to return even if time expires instantly
+    if(!state->legal_actions.empty()){
+        result.best_move = state->legal_actions[0];
+    }
+ 
+    // Start clock for mid-search time checks
+    g_search_start = Clock::now();
+    g_move_time_ms = 1800; // 90% of 2000ms; change if your time control differs
 
     int best_score = M_MAX;
     int move_index = 0;
