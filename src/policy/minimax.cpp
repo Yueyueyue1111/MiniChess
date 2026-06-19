@@ -5,6 +5,25 @@
 #include <algorithm>
 #include <chrono>
 
+enum TTFlag {
+    TT_EXACT,       // 精確分數 (在 Alpha 與 Beta 之間)
+    TT_LOWERBOUND,  // 分數下限 (發生 Beta 剪枝，真實分數可能更高)
+    TT_UPPERBOUND   // 分數上限 (所有走法都低於 Alpha，真實分數可能更低)
+};
+
+struct TTEntry {
+    uint64_t hash = 0;
+    int depth = -1;
+    int score = 0;
+    TTFlag flag;
+    Move best_move; // 把這個盤面最好的走法也存起來，這對排序超級有用！
+};
+
+// 宣告一個固定大小的 TT 表 (使用 2 的次方，方便用 bitwise AND 加速)
+// 1 << 20 大約是 100 萬個 entry，佔用幾十 MB 記憶體，很適合
+const int TT_SIZE = 1 << 20;
+static std::vector<TTEntry> TT(TT_SIZE);
+
 /*============================================================
  * Mid-search time check
  *
@@ -98,10 +117,15 @@ int quiescence(State *state, int alpha, int beta, int ply, SearchContext& ctx){
 
     // 【核心 3】遍歷這些吃子步
     for (const auto& qm : q_moves) {
-        State *next = state->next_state(qm.action);
-        // Negamax 形式的遞迴
-        int score = -quiescence(next, -beta, -alpha, ply + 1, ctx);
-        delete next;
+        // State *next = state->next_state(qm.action);
+        // // Negamax 形式的遞迴
+        // int score = -quiescence(next, -beta, -alpha, ply + 1, ctx);
+        // delete next;
+        State next_state = *state;
+        next_state.apply_move(qm.action);
+        
+        // 傳遞記憶體位址進行遞迴
+        int score = -quiescence(&next_state, -beta, -alpha, ply + 1, ctx);
 
         if (score >= beta) {
             return beta; // Beta 剪枝
@@ -162,6 +186,30 @@ int MiniMax::eval_ctx(
     }
     history.push(state->hash());
 
+    int original_alpha = alpha; 
+    
+    int tt_index = state->hash() & (TT_SIZE - 1); // 等同於 hash % TT_SIZE，但更快
+    TTEntry& tte = TT[tt_index];
+    Move tt_best_move; // 稍後可以用來做最佳步排序
+
+    if (tte.hash == state->hash()) {
+        tt_best_move = tte.best_move; // 就算深度不夠，這步通常也是最好的，存下來做 ordering
+
+        // 如果快取的深度 >= 我們現在要求的深度，就可以考慮直接拿來用
+        if (tte.depth >= depth) {
+            if (tte.flag == TT_EXACT) {
+                history.pop(state->hash());
+                return tte.score;
+            } else if (tte.flag == TT_LOWERBOUND && tte.score >= beta) {
+                history.pop(state->hash());
+                return tte.score;
+            } else if (tte.flag == TT_UPPERBOUND && tte.score <= alpha) {
+                history.pop(state->hash());
+                return tte.score;
+            }
+        }
+    }
+
     if(depth <= 0){
         // int score = state->evaluate(
         //     p.use_kp_eval, p.use_eval_mobility, &history
@@ -178,17 +226,31 @@ int MiniMax::eval_ctx(
     int opp_player = 1 - state->player;
 
     // 進行走法排序 (Move Ordering)
+    // std::sort(actions.begin(), actions.end(), [&](const Move& a, const Move& b) {
+    //     int cap_a = state->piece_at(opp_player, a.second.first, a.second.second);
+    //     int cap_b = state->piece_at(opp_player, b.second.first, b.second.second);
+        
+    //     // 簡單排序策略：有吃子的走法排在前面，且吃的子價值越高越優先
+    //     // (如果想做得更好，可以把 Q_PIECE_VALUES 拿來這裡用 MVV-LVA)
+    //     return cap_a > cap_b; 
+    // });
     std::sort(actions.begin(), actions.end(), [&](const Move& a, const Move& b) {
+        // 1. TT 裡的最佳步絕對優先！
+        if (a == b) return false;
+        if (a == tt_best_move) return true;
+        if (b == tt_best_move) return false;
+
+        // 2. 吃子優先 (使用你先前的邏輯)
         int cap_a = state->piece_at(opp_player, a.second.first, a.second.second);
         int cap_b = state->piece_at(opp_player, b.second.first, b.second.second);
         
-        // 簡單排序策略：有吃子的走法排在前面，且吃的子價值越高越優先
-        // (如果想做得更好，可以把 Q_PIECE_VALUES 拿來這裡用 MVV-LVA)
         return cap_a > cap_b; 
     });
+
     /* === Negamax loop === */
     int best_score = M_MAX;
     bool is_first_move = true;
+    Move best_action;
 
     for(auto& action : actions){
         // [ Hackathon TODO 3-2 ]
@@ -249,16 +311,43 @@ int MiniMax::eval_ctx(
         // }
         if(score > best_score){
             best_score = score;
+            best_action = action;
         }
         if(best_score > alpha){
             alpha = best_score;
         }
         if(alpha >= beta){
-            history.pop(state->hash());
+            //history.pop(state->hash());
             break;
         }
 
     }
+
+    if (ctx.stop) {
+            history.pop(state->hash());
+            return best_score;
+        }
+
+    /* === 寫入 置換表 (Transposition Table) === */
+    TTFlag flag;
+    if (best_score <= original_alpha) {
+        flag = TT_UPPERBOUND; // 所有走法都很爛，連原本的 alpha 都沒突破
+    } else if (best_score >= beta) {
+        flag = TT_LOWERBOUND; // 發生了剪枝，這個盤面至少有 best_score 這麼好
+    } else {
+        flag = TT_EXACT;      // 找到了真正的最佳分數
+    }
+
+    // 替換掉舊的 entry (這裡使用最簡單的 Always Replace 策略)
+    tte.hash = state->hash();
+    tte.depth = depth;
+    tte.score = best_score;
+    tte.flag = flag;
+    tte.best_move = best_action;
+    // tte.best_move 最好在你迴圈裡找到 best_score 時順便記錄下來
+    // 你可以在 for 迴圈外面宣告一個 Move best_action;
+    // 在 if (score > best_score) 裡面加上 best_action = action;
+    // 最後在這裡 tte.best_move = best_action;
 
     history.pop(state->hash());
     return best_score;
@@ -278,6 +367,7 @@ SearchResult MiniMax::search(
 ){
     //throw std::runtime_error("AI is definitely being called!");
     ctx.reset();
+    ctx.stop = false;
     MMParams p = MMParams::from_map(ctx.params);
     SearchResult result;
     result.depth = depth;
@@ -303,41 +393,65 @@ SearchResult MiniMax::search(
     }
  
     // Start clock for mid-search time checks
-    g_search_start = Clock::now();
+    if(depth==1)g_search_start = Clock::now();
     g_move_time_ms = 1800; // 90% of 2000ms; change if your time control differs
 
-    int best_score = M_MAX;
+    int best_score = M_MAX + 200;
     int move_index = 0;
-    int total_moves = (int)state->legal_actions.size();
+    //int total_moves = (int)state->legal_actions.size();
 
+
+    auto actions = state->legal_actions;
+    int total_moves = (int)actions.size();
+    int opp_player = 1 - state->player;
+    
+    std::sort(actions.begin(), actions.end(), [&](const Move& a, const Move& b) {
+        int cap_a = state->piece_at(opp_player, a.second.first, a.second.second);
+        int cap_b = state->piece_at(opp_player, b.second.first, b.second.second);
+        return cap_a > cap_b; 
+    });
     //initialize alpha-beta
     int alpha = M_MAX;
     int beta = P_MAX;
     bool is_first_move = true;
 
 
-    for(auto& action : state->legal_actions){
+    for(auto& action : actions){
+        if (ctx.stop) break;
         /* [ Hackathon TODO 4-1 ]
          * search this move like TODO 3, but starting from the root */
-        State *next = state->next_state(action);
+        State next_state = *state;
+        next_state.apply_move(action);
         //int score = -eval_ctx(next, depth-1, history, 1, ctx, p, -beta, -alpha);
+        // int score;
+        // if (is_first_move) {
+        //     // 第一個走法：完整 Window
+        //     score = -eval_ctx(next, depth - 1, history, 1, ctx, p, -beta, -alpha);
+        //     is_first_move = false;
+        // } else {
+        //     // 後續走法：Null Window 測試
+        //     score = -eval_ctx(next, depth - 1, history, 1, ctx, p, -alpha - 1, -alpha);
+
+        //     // 測試失敗，觸發 Re-search
+        //     if (score > alpha && score < beta) {
+        //         score = -eval_ctx(next, depth - 1, history, 1, ctx, p, -beta, -alpha);
+        //     }
+        // }
+        // // std::cout << "Action: " << action.first.first << " to " << action.second.first 
+        // //   << " | Score: " << score << std::endl; 
+        // delete next;
         int score;
         if (is_first_move) {
-            // 第一個走法：完整 Window
-            score = -eval_ctx(next, depth - 1, history, 1, ctx, p, -beta, -alpha);
+            score = -eval_ctx(&next_state, depth - 1, history, 1, ctx, p, -beta, -alpha);
             is_first_move = false;
         } else {
-            // 後續走法：Null Window 測試
-            score = -eval_ctx(next, depth - 1, history, 1, ctx, p, -alpha - 1, -alpha);
+            score = -eval_ctx(&next_state, depth - 1, history, 1, ctx, p, -alpha - 1, -alpha);
 
-            // 測試失敗，觸發 Re-search
             if (score > alpha && score < beta) {
-                score = -eval_ctx(next, depth - 1, history, 1, ctx, p, -beta, -alpha);
+                score = -eval_ctx(&next_state, depth - 1, history, 1, ctx, p, -beta, -alpha);
             }
         }
-        // std::cout << "Action: " << action.first.first << " to " << action.second.first 
-        //   << " | Score: " << score << std::endl; 
-        delete next;
+
         if(score > best_score){
             // [ Hackathon TODO 4-2 ]
             // keep this move if it is the best so far
