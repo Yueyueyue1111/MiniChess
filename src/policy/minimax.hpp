@@ -24,7 +24,13 @@ public:
         GameHistory& history,
         int ply,
         SearchContext& ctx,
+<<<<<<< HEAD
         const MMParams& p
+=======
+        const MMParams& p,
+        int alpha,
+        int beta
+>>>>>>> dc23599caf428c598707c4740a32d8f63e198c1f
     );
     static SearchResult search(
         State *state,

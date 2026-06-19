@@ -787,3 +787,4 @@ bool State::check_repetition(const GameHistory& history, int& out_score) const {
     }
     return false;
 }
+
