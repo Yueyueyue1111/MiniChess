@@ -37,7 +37,7 @@ static const int pst[6][BOARD_H][BOARD_W] = {
     // Queen
     {{-2,  0,  2,  0, -2}, { 0,  2,  4,  2,  0}, { 0,  4,  6,  4,  0},
      { 0,  4,  6,  4,  0}, { 0,  2,  4,  2,  0}, {-2,  0,  2,  0, -2}},
-    // King
+    // King_new
     {{-8, -8, -8, -8, -8}, {-6, -6, -6, -6, -6}, {-5, -5, -5, -5, -5},
      {-4, -4, -4, -4, -4}, {-2, -2, -4, -2, -2}, { 8,  8,  2,  8,  8}},
 };
@@ -147,7 +147,7 @@ int State::evaluate(
 
     // return self_score - oppn_score + bonus;
     int final_score = self_score - oppn_score + bonus;
-    return (final_score == 0) ? 0 : final_score;
+    return final_score;
 }
 
 
@@ -801,18 +801,41 @@ bool State::check_repetition(const GameHistory& history, int& out_score) const {
     return false;
 }
 
-bool State::is_capture(const Move& move) const {
-    // move.second 是 Move 的目標座標 (row, col)
-    int to_row = move.second.first;
-    int to_col = move.second.second;
 
-    // 目前玩家是 this->player，對手就是 1 - this->player
-    int opponent = 1 - this->player;
+void State::apply_move(const Move& move){
+    if(!zobrist_ready){ init_zobrist(); }
 
-    // 檢查對手的棋盤位置是否有棋子 (若值 > 0 表示有棋子)
-    if (board.board[opponent][to_row][to_col] != 0) {
-        return true;
-    }
+    Point from = move.first, to = move.second;
+    int p = this->player;
+    int opp = 1 - p;
+
+    int8_t orig_piece = board.board[p][from.first][from.second];
+    int8_t moved = orig_piece;
     
-    return false;
+    // promotion for pawn
+    if(moved == 1 && (to.first == BOARD_H-1 || to.first == 0)){
+        moved = 5;
+    }
+
+    
+    uint64_t h = this->hash();
+    h ^= zobrist_side;
+    h ^= zobrist_piece[p][orig_piece][from.first][from.second];
+
+    int8_t captured = board.board[opp][to.first][to.second];
+    if(captured){
+        h ^= zobrist_piece[opp][captured][to.first][to.second];
+        board.board[opp][to.first][to.second] = 0;
+    }
+
+    h ^= zobrist_piece[p][moved][to.first][to.second];
+    
+    board.board[p][from.first][from.second] = 0;
+    board.board[p][to.first][to.second] = moved;
+    
+    this->player = opp;
+    this->zobrist_hash = h;
+    this->zobrist_valid = true;
+    this->legal_actions.clear();
+    this->game_state = UNKNOWN;
 }

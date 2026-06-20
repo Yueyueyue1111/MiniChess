@@ -4,7 +4,7 @@
 
 
 /*============================================================
- * Random — search
+ * Random ??? search
  *
  * Pick a uniformly random legal move.
  *============================================================*/
@@ -42,7 +42,7 @@ SearchResult Random::search(
 
 
 /*============================================================
- * Random — default_params / param_defs
+ * Random ??? default_params / param_defs
  *============================================================*/
 ParamMap Random::default_params(){
     return {};

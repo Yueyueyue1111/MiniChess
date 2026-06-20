@@ -48,7 +48,7 @@ static void send(const std::string& msg){
 /* DROP_LETTERS is defined per-game in config.hpp for games with drops.
  * Maps hand piece index (1..NUM_HAND_TYPES) to a letter for UBGI protocol.
  * E.g. MiniShogi: " PSGBR", Kohaku Shogi: " PSGLNBR".
- * Games without drops don't define it — provide a fallback. */
+ * Games without drops don't define it ??? provide a fallback. */
 #if NUM_HAND_TYPES == 0
 static const char DROP_LETTERS[] = " ";
 #endif
@@ -73,7 +73,7 @@ static std::string sq_to_str(size_t row, size_t col){
 }
 
 std::string move_to_str(const Move& m){
-    /* Placement move: from == to → output just the destination */
+    /* Placement move: from == to ??? output just the destination */
     if(m.first == m.second){
         return sq_to_str(m.second.first, m.second.second);
     }
@@ -463,7 +463,12 @@ static void do_search(
         }
     }
 
-    if(alive()){
+    // if(alive()){
+    //     send("bestmove " + move_to_str(best_move));
+    //     g_bestmove_sent = true;
+    // }
+    // g_searching = false;
+    if(!g_bestmove_sent.load()){
         send("bestmove " + move_to_str(best_move));
         g_bestmove_sent = true;
     }

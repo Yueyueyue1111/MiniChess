@@ -79,5 +79,7 @@ public:
     int board_h() const override { return BOARD_H; }
     int board_w() const override { return BOARD_W; }
     const char* game_name() const override { return "MiniChess"; }
-    bool is_capture(const Move& move) const;
+
+    //replace new
+    void apply_move(const Move& move);
 };

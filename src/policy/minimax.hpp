@@ -37,13 +37,4 @@ public:
 
     static ParamMap default_params();
     static std::vector<ParamDef> param_defs();
-
-    static int quiesce(
-        State *state,
-        int alpha,
-        int beta,
-        GameHistory& history,
-        SearchContext& ctx,
-        const MMParams& p
-    );
 };

@@ -3,27 +3,98 @@
 #include "minimax.hpp"
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 
+/*============================================================
+ * Mid-search time check
+ *============================================================*/
+using Clock     = std::chrono::high_resolution_clock;
+using TimePoint = std::chrono::time_point<Clock>;
+ 
+static TimePoint g_search_start;
+static int64_t   g_move_time_ms = 0;  // 0 = no limit (depth-only mode)
+ 
+static inline void check_time(SearchContext& ctx){
+    if((ctx.nodes & 1023) != 0) return;  // only check every 1024 nodes
+    if(g_move_time_ms <= 0) return;       // no time limit set
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        Clock::now() - g_search_start).count();
+    if(elapsed >= g_move_time_ms * 9 / 10)
+        ctx.stop = true;
+}
 
-//Quiesce Search
-int MiniMax::quiesce(State *state, int alpha, int beta, GameHistory& history, SearchContext& ctx, const MMParams& p) {
-    int stand_pat = state->evaluate(p.use_kp_eval, p.use_eval_mobility, &history);
-    if (stand_pat >= beta) return beta;
-    if (stand_pat > alpha) alpha = stand_pat;
+/*============================================================
+ * Quiescence
+ *============================================================*/
+static const int Q_PIECE_VALUES[] = {0, 10, 50, 30, 30, 90, 900};
 
-    state->get_legal_actions();
-    for (auto& action : state->legal_actions) {
-        // 重要：這裡要過濾，只搜尋「吃子」的動作 (Capture)
-        // 假設您的 state 類別中有方法可以判斷是否為吃子，或者透過檢查 board
-        if (!state->is_capture(action)) continue; 
+int quiescence(State *state, int alpha, int beta, int ply, SearchContext& ctx){
+    ctx.nodes++;
+    //check_time(ctx);
+    if(ctx.stop)return 0;
 
-        State *next = state->next_state(action);
-        int score = -quiesce(next, -beta, -alpha, history, ctx, p);
+    // return the score for a winning terminal state
+    if(state->game_state == WIN) return P_MAX - ply;
+    if(state->game_state == DRAW) return 0;
+
+    if (state->legal_actions.empty() && state->game_state == UNKNOWN) {
+        state->get_legal_actions();
+    }
+    int stand_pat = state->evaluate(true, true, nullptr);
+    if(stand_pat>=beta){
+        return beta;
+    }
+    if(stand_pat>alpha){
+        alpha=stand_pat;
+    }
+
+    // if (state->legal_actions.empty() && state->game_state == UNKNOWN) {
+    //     state->get_legal_actions();
+    // }
+    auto actions = state->legal_actions;
+    if (actions.empty()) return stand_pat;
+
+    struct QMove {
+        Move action;
+        int score;
+    };
+    std::vector<QMove> q_moves;
+    q_moves.reserve(actions.size());
+
+    int current_player = state->player;
+    int opponent_player = 1 - current_player;
+
+    for (const auto& move : actions) {
+        int tr = move.second.first;
+        int tc = move.second.second;
+        int fr = move.first.first;
+        int fc = move.first.second;
+
+        int captured_piece = state->piece_at(opponent_player, tr, tc);
+        if (captured_piece > 0 && captured_piece <= 6) {
+            int my_piece = state->piece_at(current_player, fr, fc);
+            int score = 10000 + (Q_PIECE_VALUES[captured_piece] * 10) - Q_PIECE_VALUES[my_piece];
+            q_moves.push_back({move, score});
+        }
+    }
+
+    std::sort(q_moves.begin(), q_moves.end(), [](const QMove& a, const QMove& b) {
+        return a.score > b.score;
+    });
+
+    for (const auto& qm : q_moves) {
+        State *next = state->next_state(qm.action);
+        int score = -quiescence(next, -beta, -alpha, ply + 1, ctx);
         delete next;
 
-        if (score >= beta) return beta;
-        if (score > alpha) alpha = score;
+        if (score >= beta) {
+            return beta; 
+        }
+        if (score > alpha) {
+            alpha = score;
+        }
     }
+
     return alpha;
 }
 
@@ -46,6 +117,7 @@ int MiniMax::eval_ctx(
     if(ply > ctx.seldepth){
         ctx.seldepth = ply;
     }
+    //check_time(ctx);
     if(ctx.stop){
         return 0;
     }
@@ -80,67 +152,73 @@ int MiniMax::eval_ctx(
         // ); 
         // history.pop(state->hash());
         // return score;
-        return quiesce(state, alpha, beta, history, ctx, p);
+        int val = quiescence(state, alpha, beta, ply, ctx);
+        history.pop(state->hash());
+        return val;
     }
 
-    if(state->legal_actions.empty()){
-        if(state->game_state == WIN) return P_MAX - ply;
-        if(state->game_state == DRAW) return 0;
-        return -P_MAX + ply; // 這裡強制回傳輸棋分數，AI 才會想辦法避免走入此路
-    }
 
+    auto actions = state->legal_actions;
+    int opp_player = 1 - state->player;
+
+    std::sort(actions.begin(), actions.end(), [&](const Move& a, const Move& b) {
+        int cap_a = state->piece_at(opp_player, a.second.first, a.second.second);
+        int cap_b = state->piece_at(opp_player, b.second.first, b.second.second);
+        
+        
+        return cap_a > cap_b; 
+    });
     /* === Negamax loop === */
     int best_score = M_MAX;
     bool is_first_move = true;
-
-    std::vector<Move> actions = state->legal_actions;
-    std::sort(actions.begin(), actions.end(), [&](const Move& a, const Move& b) {
-        bool a_cap = state->is_capture(a);
-        bool b_cap = state->is_capture(b);
-        
-        if (a_cap && b_cap) {
-            // 如果都是吃子，比較價值 (假設您有獲取棋子價值的函數)
-            // 例如：被吃的棋子價值越高，越優先
-            return state->piece_at(1-state->player, a.second.first, a.second.second) > state->piece_at(1-state->player, b.second.first, b.second.second);
-        }
-        
-        // 如果只有一個吃子，吃子的優先
-        if (a_cap != b_cap) return a_cap > b_cap;
-        
-        return false; 
-    });
 
     for(auto& action : actions){
         // [ Hackathon TODO 3-2 ]
         // create the child state after applying action
 
-        State *next = (State*)state->next_state(action);
-        //bool same = next->same_player_as_parent();
-
+        // State *next = (State*)state->next_state(action);
+        // bool same = next->same_player_as_parent();
+        State next_state = *state;  
+        next_state.apply_move(action);
         // [Hackathon TODO 3-3]
         // search the child one level deeper
-        
         // int score = same ? 
         //             eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, beta) :
         //             -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+        
         int score;
         if (is_first_move) {
-            // 第一個著法：用正常的 Alpha-Beta 搜尋
-            score = -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+            score = -eval_ctx(&next_state, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+            is_first_move = false;
         } else {
-            // 後續著法：使用「極窄視窗」測試
-            score = -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -alpha - 1, -alpha);
-            
-            // 如果測試結果「打臉」了我們的假設 (score > alpha)，表示此著法可能更好，需重搜
+            score = -eval_ctx(&next_state, depth - 1, history, ply + 1, ctx, p, -alpha - 1, -alpha);
             if (score > alpha && score < beta) {
-                score = -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+                score = -eval_ctx(&next_state, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
             }
         }
+        
+        // int score;
+        // if (is_first_move) {
+        //     score = same ? 
+        //             eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, beta) :
+        //            -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+        //     is_first_move = false;
+        // } else {
+        //     score = same ?
+        //             eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, alpha + 1) :
+        //            -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -alpha - 1, -alpha);
 
+        //     if (score > alpha && score < beta) {
+        //         score = same ?
+        //                 eval_ctx(next, depth, history, ply + 1, ctx, p, alpha, beta) :
+        //                -eval_ctx(next, depth - 1, history, ply + 1, ctx, p, -beta, -alpha);
+        //     }
+        // }
+        
         // [Hackathon TODO 3-4]
         // convert raw to the current player's perspective.
-        is_first_move = false;
-        delete next;
+
+        //delete next;
 
         // [ Hackathon TODO 3-5 ]
         // update best_score if this child is better.
@@ -154,6 +232,7 @@ int MiniMax::eval_ctx(
             alpha = best_score;
         }
         if(alpha >= beta){
+            history.pop(state->hash());
             break;
         }
 
@@ -175,11 +254,11 @@ SearchResult MiniMax::search(
     GameHistory& history,
     SearchContext& ctx
 ){
-    //throw std::runtime_error("AI is definitely being called!");
     ctx.reset();
     MMParams p = MMParams::from_map(ctx.params);
     SearchResult result;
     result.depth = depth;
+    result.score=0;
 
     if(!state->legal_actions.size()){
         state->get_legal_actions();
@@ -196,44 +275,42 @@ SearchResult MiniMax::search(
     //     }
     // }
 
-    if (state->legal_actions.empty()) {
-        result.score = -P_MAX; // 或視情況給予平局分數
-        return result;
+    // Fallback
+    if (!state->legal_actions.empty()) {
+        result.best_move = state->legal_actions[0]; 
+    } else {
+        result.best_move = {{0,0}, {0,0}};
     }
-
-    int best_score = 2*M_MAX;
+ 
+    // Start clock for mid-search time checks
+    // g_search_start = Clock::now();
+    // g_move_time_ms = 1800;
+    int best_score = M_MAX;
     int move_index = 0;
     int total_moves = (int)state->legal_actions.size();
-    result.best_move = state->legal_actions.empty() ? Move() : state->legal_actions[0];
 
     //initialize alpha-beta
-    int alpha = 2*M_MAX;
-    int beta = 2*P_MAX;
+    int alpha = M_MAX;
+    int beta = P_MAX;
+    bool is_first_move = true;
 
-    std::vector<Move> actions = state->legal_actions;
-    std::sort(actions.begin(), actions.end(), [&](const Move& a, const Move& b) {
-        bool a_cap = state->is_capture(a);
-        bool b_cap = state->is_capture(b);
-        
-        if (a_cap && b_cap) {
-            // 如果都是吃子，比較價值 (假設您有獲取棋子價值的函數)
-            // 例如：被吃的棋子價值越高，越優先
-            return state->piece_at(1-state->player, a.second.first, a.second.second) > state->piece_at(1-state->player, b.second.first, b.second.second);
-        }
-        
-        // 如果只有一個吃子，吃子的優先
-        if (a_cap != b_cap) return a_cap > b_cap;
-        
-        return false; 
-    });
 
-    for(auto& action : actions){
+    for(auto& action : state->legal_actions){
         /* [ Hackathon TODO 4-1 ]
          * search this move like TODO 3, but starting from the root */
         State *next = state->next_state(action);
-        int score = -eval_ctx(next, depth-1, history, 1, ctx, p, -beta, -alpha);
-        // std::cout << "Action: " << action.first.first << " to " << action.second.first 
-        //   << " | Score: " << score << std::endl; 
+        //int score = -eval_ctx(next, depth-1, history, 1, ctx, p, -beta, -alpha);
+        int score;
+        if (is_first_move) {
+            score = -eval_ctx(next, depth - 1, history, 1, ctx, p, -beta, -alpha);
+            is_first_move = false;
+        } else {
+            score = -eval_ctx(next, depth - 1, history, 1, ctx, p, -alpha - 1, -alpha);
+
+            if (score > alpha && score < beta) {
+                score = -eval_ctx(next, depth - 1, history, 1, ctx, p, -beta, -alpha);
+            }
+        }
         delete next;
         if(score > best_score){
             // [ Hackathon TODO 4-2 ]
